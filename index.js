@@ -57,22 +57,32 @@ async function run() {
     const sourceUrl = `${repoHtmlUrl}/tarball/${version}`;
     const forkRepoId = forkRepo ? repoId : undefined;
 
-    const getAppDetails = async id => heroku.get(`/apps/${id}`);
+    const getAppDetails = async (id) => {
+      const url = `/apps/${id}`;
+      core.debug(`Getting app details for app ID ${id} (${url})`);
+      const appDetails = await heroku.get(url);
+      core.info(`Got app details for app ID ${id} OK: ${JSON.stringify(appDetails)}`);
+      return appDetails;
+    };
 
     const outputAppDetails = (app) => {
+      core.startGroup('Output app details');
       const {
         id: appId,
         web_url: webUrl,
       } = app;
-      core.setOutput('app_id  ', appId);
+      core.info(`Review app ID: "${appId}"`);
+      core.setOutput('app_id', appId);
+      core.info(`Review app Web URL: "${webUrl}"`);
       core.setOutput('app_web_url', webUrl);
+      core.endGroup();
     };
 
     const findReviewApp = async () => {
-      core.startGroup('Find existing review app');
-      core.debug('Listing review apps...');
-      const reviewApps = await heroku.get(`/pipelines/${herokuPipelineId}/review-apps`);
-      core.info(`Listed ${reviewApps.length} review apps OK.`);
+      const apiUrl = `/pipelines/${herokuPipelineId}/review-apps`;
+      core.debug(`Listing review apps: "${apiUrl}"`);
+      const reviewApps = await heroku.get(apiUrl);
+      core.info(`Listed ${reviewApps.length} review apps OK: ${reviewApps.length} apps found.`);
 
       core.debug(`Finding review app for PR #${prNumber}...`);
       const app = reviewApps.find(app => app.pr_number === prNumber);
@@ -82,23 +92,19 @@ async function run() {
           core.notice(`Found review app for PR #${prNumber} OK, but status is "${status}"`);
           return null;
         }
-        core.info(`Found review app for PR #${prNumber} OK.`);
+        core.info(`Found review app for PR #${prNumber} OK: ${JSON.stringify(app)}`);
       } else {
         core.info(`No review app found for PR #${prNumber}`);
       }
-      core.endGroup();
       return app;
     };
 
-    // const waitReviewAppUpdated = async (reviewApp) => {
     const waitReviewAppUpdated = async () => {
-      core.startGroup('Ensure PR is up to date');
+      core.startGroup('Ensure review app is up to date');
 
-      const waitSeconds = secs => new Promise((resolve) => {
-        setTimeout(() => resolve, secs * 1000);
-      });
+      const waitSeconds = secs => new Promise(resolve => setTimeout(resolve, secs * 1000));
 
-      const checkStatus = async (app) => {
+      const checkBuildStatusForReviewApp = async (app) => {
         core.debug(`Checking build status for app: ${JSON.stringify(app)}`);
         if ('pending' === app.status || 'creating' === app.status) {
           return false;
@@ -129,6 +135,7 @@ async function run() {
           throw new Error(`Unexpected build status: "${status}" yet no matching build found`);
         }
         core.info(`Found build matching version ${version} OK: ${JSON.stringify(build)}`);
+        core.debug('XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX');
 
         switch (build.status) {
           case 'succeeded':
@@ -144,10 +151,13 @@ async function run() {
       let isFinished;
       do {
         reviewApp = await findReviewApp();
-        isFinished = await checkStatus(reviewApp);
+        isFinished = await checkBuildStatusForReviewApp(reviewApp);
+        core.debug('YYYY YYYY YYYY YYYY YYYY YYYY YYYY YYYY YYYY YYYY ');
         await waitSeconds(5);
       } while (!isFinished);
       core.endGroup();
+
+      core.debug('ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ');
       return getAppDetails(reviewApp.app.id);
     };
 
@@ -267,8 +277,8 @@ async function run() {
     if (!app) {
       await createReviewApp();
     }
-    await waitReviewAppUpdated();
-    outputAppDetails(app);
+    const updatedApp = await waitReviewAppUpdated();
+    outputAppDetails(updatedApp);
 
     if (prLabel) {
       core.startGroup('Label PR');
