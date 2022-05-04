@@ -7,10 +7,6 @@ const VALID_EVENT = 'pull_request';
 async function run() {
   try {
     const githubToken = core.getInput('github_token', { required: true });
-    const prLabel = core.getInput('github_label', {
-      required: false,
-      default: 'Review App',
-    });
     const herokuApiToken = core.getInput('heroku_api_token', {
       required: true,
     });
@@ -22,9 +18,9 @@ async function run() {
     const heroku = new Heroku({ token: herokuApiToken });
 
     const {
-      action,
       eventName,
       payload: {
+        action,
         pull_request: {
           head: {
             ref: branch,
@@ -70,11 +66,14 @@ async function run() {
       const {
         id: appId,
         web_url: webUrl,
+        name: appName,
       } = app;
       core.info(`Review app ID: "${appId}"`);
       core.setOutput('app_id', appId);
       core.info(`Review app Web URL: "${webUrl}"`);
       core.setOutput('app_web_url', webUrl);
+      core.info(`Review app name: "${appName}"`);
+      core.setOutput('app_name', appName);
       core.endGroup();
     };
 
@@ -211,6 +210,32 @@ async function run() {
       }
     };
 
+    const updateReviewApp = async (app) => {
+      core.startGroup('Update review app');
+
+      const archiveBody = {
+        owner: repoOwner,
+        repo: repo.repo,
+        ref: version,
+      };
+      core.debug(`Fetching archive: ${JSON.stringify(archiveBody)}`);
+      const { url: archiveUrl } = await octokit.rest.repos.downloadTarballArchive(archiveBody);
+      core.info(`Fetched archive OK: ${JSON.stringify(archiveUrl)}`);
+
+      const body = {
+        source_blob: {
+          url: archiveUrl,
+          version,
+        },
+      };
+      core.debug(`Creating heroku review app: ${JSON.stringify(body)}`);
+      await heroku.post(`/apps/${app.app.id}/builds`, { body });
+      core.info('Updated review app OK:', app);
+      core.endGroup();
+
+      return app;
+    };
+
     core.debug(`Deploy info: ${JSON.stringify({
       branch,
       version,
@@ -226,28 +251,6 @@ async function run() {
 
     if (forkRepo) {
       core.notice('No secrets are available for PRs in forked repos.');
-      return;
-    }
-
-    if ('labeled' === action) {
-      core.startGroup('PR labelled');
-      core.debug('Checking PR label...');
-      const {
-        payload: {
-          label: {
-            name: newLabelAddedName,
-          },
-        },
-      } = github.context;
-      if (newLabelAddedName === prLabel) {
-        core.info(`Checked PR label: "${newLabelAddedName}", so need to create review app...`);
-        await createReviewApp();
-        const app = await waitReviewAppUpdated();
-        outputAppDetails(app);
-      } else {
-        core.info('Checked PR label OK: "${newLabelAddedName}", no action required.');
-      }
-      core.endGroup();
       return;
     }
 
@@ -276,23 +279,11 @@ async function run() {
     const app = await findReviewApp();
     if (!app) {
       await createReviewApp();
+    } else {
+      await updateReviewApp(app);
     }
     const updatedApp = await waitReviewAppUpdated();
     outputAppDetails(updatedApp);
-
-    if (prLabel) {
-      core.startGroup('Label PR');
-      core.debug(`Adding label "${prLabel}" to PR...`);
-      await octokit.rest.issues.addLabels({
-        ...repo,
-        labels: [prLabel],
-        issue_number: prNumber,
-      });
-      core.info(`Added label "${prLabel}" to PR... OK`);
-      core.endGroup();
-    } else {
-      core.debug('No label specified; will not label PR');
-    }
   } catch (err) {
     core.error(err);
     core.setFailed(err.message);
